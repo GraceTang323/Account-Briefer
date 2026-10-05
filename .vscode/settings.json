@@ -4,5 +4,11 @@
     "**/bower_components": true,
     "**/.sf": true,
     "**/.sfdx": true
+  },
+  "salesforce.agentforceVibesAutocomplete.enableAutocompletionsByFileType": {
+    "apex": false,
+    "javascript": true,
+    "css": true,
+    "html": true
   }
 }

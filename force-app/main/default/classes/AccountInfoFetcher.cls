@@ -1,51 +1,58 @@
 public with sharing class AccountInfoFetcher {
+    /**
+     * Given an account name or ID, queries the Account and its related fields from the org
+     * Returns list of responses suitable for prompting.
+     */
     @InvocableMethod(
         label='Get Account Info'
-        description='Queries CRM data and fetches external news for a specified Account.'
+        description='Queries CRM data for a specified Account by Account ID or Name.'
     )
-    public static FetchResponse fetchInfo(String accountIdentifier) {
-        // given an account name or ID, queries up to 5 related Contacts, open Opportunties, and Cases from the last 90 days
-        // returns each section as a string suitable for prompt template injection.
-
-        if (!verifyInput(accountIdentifier)) {
-            return null;
-        }
-        // bind variable, SOQL injection vector
-        String pattern = '%' + String.escapeSingleQuotes(accountIdentifier) + '%';
-
-        // fetch CRM data from org
-        Account acc = [SELECT Id, Name, Industry, AnnualRevenue, Rating, BillingCity, OwnerId,
-                        (SELECT FirstName, LastName, Email, Title FROM Contacts LIMIT 5),
-                        (SELECT Stage, Amount, CloseDate FROM Opportunities WHERE IsClosed = false),
-                        (SELECT Subject, Status, Priority, CreatedDate FROM Cases WHERE CreatedDate = LAST_N_DAYS:90)
-                        FROM Account 
-                        WHERE (Id = :accountIdentifier) OR (Name LIKE :pattern) WITH USER_MODE LIMIT 1];
+    public static List<FetchResponse> fetchInfo(List<FetchRequest> accounts) {
         
-        if (!acc) {
-            return null;
+        List<FetchResponse> responses = new List<FetchResponse>();
+
+        for (FetchRequest acc : accounts) {
+
+            FetchResponse response = new FetchResponse();
+
+            // verify input is an ID or a Name
+            if (!verifyInput(acc.accountIdentifier)) {
+                // construct an error response
+                response.accountFound = false;
+                response.errorMessage = 'Input: ' + acc.accountIdentifier + ' is not a valid ID or Account Name';
+                responses.add(response);
+                continue;
+            }
+
+            try {
+                AccountInfoService.FetchContext context = AccountInfoService.fetchAccount(acc.accountIdentifier);
+
+                if (context == null) {
+                    response.accountFound = false;
+                    response.errorMessage = 'Input: ' + acc.accountIdentifier + ' has no associated Account being found';
+                    responses.add(response);
+                    continue;
+                }
+
+                // construct the prompt response
+                response.accountDetails = context.accountDetails;
+                response.contactsSummary = context.contactsSummary;
+                response.opportunitiesSummary = context.opportunitiesSummary;
+                response.casesSummary = context.casesSummary;
+                response.isHighValue = context.isHighValue;
+                response.accountFound = true;
+
+                responses.add(response);
+
+            } catch (Exception e) {
+                response.accountFound = false;
+                response.errorMessage = 'Unexpected error occurred fetching account: ' + e.getMessage();
+                responses.add(response);
+                System.debug('Unexpected error occurred: ' + e.getMessage());
+            }
         }
-
-        String accDetails = 'Internal Account Details:\n' + '- Industry: ' + acc.Industry + '\n- Revenue: $' + String.valueOf(acc.AnnualRevenue) + '\n- Rating: ' + 
-                            acc.Rating + '\n- City: '+ acc.BillingCity + '\n- Owner: ' + acc.OwnerId;
         
-        String ctSummary = '';
-        String opSummary = '';
-        String csSummary = '';
-        List<Contact> contacts = acc.Contacts != null ? acc.Contacts : '';
-        List<Opportunity> opportunities = acc.Opportunities;
-        List<Case> cases = acc.Cases;
-                            
-        // create the response
-        FetchResponse response = new FetchResponse();
-        response.accountName = acc.Name;
-        response.accountDetails = accDetails;
-        response.contactsSummary = ctSummary;
-        response.opportunitiesSummary = opSummary;
-        response.casesSummary = csSummary;
-        response.isHighValue = (acc.AnnualRevenue != null && acc.AnnualRevenue > 1000000) || acc.Rating == 'Hot' ? true : false;
-        response.accountFound = true;
-
-        return response;
+        return responses;
     }
 
     public class FetchRequest {
@@ -58,44 +65,51 @@ public with sharing class AccountInfoFetcher {
 
     public class FetchResponse {
         @InvocableVariable(
-            required=true
-            description='Account name for prompt request'
-        )
-        public String accountName;
-        @InvocableVariable(
-            required=true
-            description='One line summary of the account: Industry, AnnualRevenue, Rating, BillingCity, Owner'
+            description='One line summary of the account: Name, Industry, AnnualRevenue, Rating, BillingCity, Owner'
         )
         public String accountDetails;
+
         @InvocableVariable(
             description='Formatted list of up to 5 Contacts (Name, Title, Email)'
         )
         public String contactsSummary;
+
         @InvocableVariable(
             description='Open opportunities: Name, Stage, Amount, CloseDate'
         )
         public String opportunitiesSummary;
+
         @InvocableVariable(
             description='Recent cases (90 days): Subject, Status, Priority, CreatedDate'
         )
         public String casesSummary;
+
         @InvocableVariable(
             description='True if AnnualRevenue is greater than 1000000, or if the Account rating is hot'
         )
         public Boolean isHighValue;
+
         @InvocableVariable(
             required=true
+            description='Whether a matching Account was found'
         )
         public Boolean accountFound;
+
+        @InvocableVariable(
+            description='Contains an error or status message if an Account could not be retrieved'
+        )
+        public String errorMessage;
     }
 
-    // helped method to detect whether the identifier matches an Id format (length == 15 || 18 and starts with 001) and query Id, or query by name
-    private Boolean verifyInput(String accountIdentifier) {
+    // helped method to detect whether the identifier matches an Id format or Name length
+    private static Boolean verifyInput(String accountIdentifier) {
         
         if (accountIdentifier == null) {
             return false;
         }
         Boolean isId = (accountIdentifier.length() == 15 || accountIdentifier.length() == 18) && accountIdentifier.startsWith('001');
-        return isId || (accountIdentifier.length() > 0 && accountIdentifier.length < 200);
+        Boolean isName = (accountIdentifier.length() > 0 && accountIdentifier.length() < 200);
+
+        return isId || isName;
     }
 }

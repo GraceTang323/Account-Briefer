@@ -19,17 +19,16 @@ config:
 
 variables:
     # Prompt template passthrough variables
-    pt_account_name: mutable string = ""
     pt_account_details: mutable string = ""
     pt_contacts: mutable string = ""
     pt_opportunities: mutable string = ""
     pt_cases: mutable string = ""
-    pt_is_high_value: mutable string = "false"
 
     # Final brief and status
     account_brief: mutable string = ""
     account_found: mutable boolean = False
     is_high_value_account: mutable boolean = False
+    error_message: mutable string = ""
 
 language:
     default_locale: "en_US"
@@ -43,18 +42,18 @@ start_agent main:
     reasoning:
         instructions: ->
             | Greet the user and ask for the account name or Salesforce Account ID they want briefed.
-              When the user provides an account name or ID, retrieve the relevant
-              account data and present a clear, concise summary.
+              When the user provides one, call the action {!@actions.fetch_and_brief} to retrieve data from the CRM. 
+              NEVER use your own training knowledge to answer questions about any account. 
+              ALL account data must come from the fetch_and_brief action call only.
               Do NOT ask for additional information - proceed with what the user provides.
             
             if @variables.account_found == True:
                 run @actions.generate_brief
-                    with "Input:accountName" = @variables.pt_account_name
                     with "Input:accountDetails" = @variables.pt_account_details
                     with "Input:contactsSummary" = @variables.pt_contacts
                     with "Input:opportunitiesSummary" = @variables.pt_opportunities
                     with "Input:casesSummary" = @variables.pt_cases
-                    with "Input:isHighValue" = @variables.pt_is_high_value
+                    with "Input:isHighValue" = @variables.is_high_value_account
                     set @variables.account_brief = @outputs.promptResponse
 
             if @variables.account_found == True:
@@ -65,28 +64,22 @@ start_agent main:
                   high-value status prominently at the top of your response.
                   Do NOT call any action again.
 
-            if @variables.account_found == False and @variables.pt_account_name != "":
+            if @variables.account_found == False and @variables.error_message != "":
                 | Inform the user that no account matching their input was found.
+                  If an error message exists, display the message. Do not try to predict an error.
                   Ask them to verify the account name or ID and try again.
 
         actions:
             fetch_and_brief: @actions.fetch_account_data
                 description: "Retrieve account CRM data by name or Salesforce ID"
                 with accountIdentifier = ...
-                set @variables.pt_account_name = @outputs.accountName
                 set @variables.pt_account_details = @outputs.accountDetails
                 set @variables.pt_contacts = @outputs.contactsSummary
                 set @variables.pt_opportunities = @outputs.opportunitiesSummary
                 set @variables.pt_cases = @outputs.casesSummary
-                set @variables.account_found = ...
-
+                set @variables.account_found = @outputs.accountFound
+                set @variables.error_message = @outputs.errorMessage
                 set @variables.is_high_value_account = @outputs.isHighValue
-                if @variables.is_high_value_account == True:
-                    set @variables.pt_is_high_value = "true"
-                else:
-                    set @variables.pt_is_high_value = "false"
-                
-                
 
     actions:
         fetch_account_data:
@@ -97,8 +90,6 @@ start_agent main:
                     is_required: True
                     description: "Account name or Salesforce ID"
             outputs:
-                accountName: string
-                    filter_from_agent: True
                 accountDetails: string
                     filter_from_agent: True
                 contactsSummary: string
@@ -111,13 +102,15 @@ start_agent main:
                     filter_from_agent: True
                 accountFound: boolean
                     filter_from_agent: True
-                
+                errorMessage: string
+                    filter_from_agent: True
+
         generate_brief:
             description: "Generate a 2-paragraph account brief using the Account Brief Prompt Template"
-            target: "prompt://CHANGE_ME_LATER" # TODO: add Account_Brief_Template
+            target: "prompt://Account_Brief_Template"
+            include_in_progress_indicator: True
+            progress_indicator_message: "Looking at account information..."
             inputs:
-                "Input:accountName": string
-                    is_required: True
                 "Input:accountDetails": string
                     is_required: True
                 "Input:contactsSummary": string
@@ -126,7 +119,7 @@ start_agent main:
                     is_required: True
                 "Input:casesSummary": string
                     is_required: True
-                "Input:isHighValue": string
+                "Input:isHighValue": boolean
                     is_required: True
             outputs:
                 promptResponse: string
